@@ -310,4 +310,4 @@ def run(broad: bool = False, top_n: int = 25):
 if __name__ == "__main__":
     # Default: quick run on the sample universe.
     # Run with broad=True for a full-universe sweep (slower).
-    run(broad=False, top_n=25)
+    run(broad=False, top_n=100)

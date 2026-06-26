@@ -1,0 +1,24 @@
+{
+  "C": {
+    "ticker": "C",
+    "signal": "BUY",
+    "entry": 142.99000549316406,
+    "target": 151.57,
+    "stop_loss": 132.98,
+    "hold_time": "Swing (1-2 weeks)",
+    "hold_days": 10,
+    "exit_note": "No specific pattern detected -- using default swing estimate.",
+    "opened_at": "2026-06-17T03:43:52.265752"
+  },
+  "GD": {
+    "ticker": "GD",
+    "signal": "BUY",
+    "entry": 350.010009765625,
+    "target": 371.01,
+    "stop_loss": 325.51,
+    "hold_time": "Position (15-60 days)",
+    "hold_days": 25,
+    "exit_note": "Exit window based on Ascending Triangle (score 60, quality Moderate).",
+    "opened_at": "2026-06-21T10:26:29.241473"
+  }
+}

@@ -1,0 +1,18 @@
+2026-06-26 09:00:06.984 No runtime found, using MemoryCacheStorageManager
+2026-06-26 09:00:07.001 No runtime found, using MemoryCacheStorageManager
+2026-06-26 09:00:07.001 No runtime found, using MemoryCacheStorageManager
+2026-06-26 09:00:07.002 No runtime found, using MemoryCacheStorageManager
+2026-06-26 09:00:07.002 No runtime found, using MemoryCacheStorageManager
+2026-06-26 09:00:09.256 No runtime found, using MemoryCacheStorageManager
+2026-06-26 09:00:09.275 No runtime found, using MemoryCacheStorageManager
+2026-06-26 09:00:18.553 No runtime found, using MemoryCacheStorageManager
+2026-06-26 09:00:18.573 No runtime found, using MemoryCacheStorageManager
+2026-06-26 09:00:18.574 No runtime found, using MemoryCacheStorageManager
+2026-06-26 09:00:18.575 No runtime found, using MemoryCacheStorageManager
+2026-06-26 09:00:18.987 No runtime found, using MemoryCacheStorageManager
+2026-06-26 09:00:24.283 No runtime found, using MemoryCacheStorageManager
+$GOOGL: possibly delisted; no price data found  (period=3mo)
+
+1 Failed download:
+['GOOGL']: possibly delisted; no price data found  (period=3mo)
+^C
