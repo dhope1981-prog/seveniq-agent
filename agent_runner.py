@@ -362,4 +362,4 @@ def run(broad: bool = False, top_n: int = 25):
     print("=== Run complete ===")
 
 if __name__ == "__main__":
-    run(broad=False, top_n=100)
+    run(broad=True, top_n=100)
