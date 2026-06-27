@@ -273,7 +273,7 @@ def tier2_analyze(candidates: list) -> list:
 
     def analyze_one(ticker):
         try:
-            result = analyze_stock(ticker)
+            result = analyze_stock(ticker, include_news=True, include_eightk=True)
             return ticker, result
         except Exception as e:
             return ticker, {"signal": "HOLD", "confidence": 0}
