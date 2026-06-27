@@ -12,11 +12,13 @@
 # is written comparing what was planned against what actually happened.
 # No automatic learning or self-modification happens here -- this just
 # writes the honest record for a human to review later.
+
 import sys
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, date
 import pytz
+
 sys.path.insert(0, r'C:\Users\Dustin\stock_intel_v5')
 from scanner import run_scanner
 from ai_brain import analyze_stock
@@ -30,8 +32,7 @@ except Exception:
     VOICE_AVAILABLE = False
 
 def announce(text):
-    """Speak a message out loud if voice is available. Never blocks or
-    crashes the agent if voice fails for any reason."""
+    """Speak a message out loud if voice is available."""
     if not VOICE_AVAILABLE:
         return
     try:
@@ -48,24 +49,56 @@ POSTMORTEM_FILE   = os.path.join(LOG_DIR, "postmortems.jsonl")
 
 ET = pytz.timezone("America/New_York")
 
-def is_market_hours() -> bool:
-    """Returns True only if current ET time is within regular market hours
-    (9:30 AM - 4:00 PM ET, Monday-Friday)."""
+# ── US Market Holiday list (update annually) ───────────────────────────────────
+US_MARKET_HOLIDAYS_2026 = {
+    date(2026, 1, 1),
+    date(2026, 1, 19),
+    date(2026, 2, 16),
+    date(2026, 4, 3),
+    date(2026, 5, 25),
+    date(2026, 6, 19),
+    date(2026, 7, 3),
+    date(2026, 9, 7),
+    date(2026, 11, 26),
+    date(2026, 11, 27),
+    date(2026, 12, 25),
+}
+
+def is_market_open() -> bool:
     now_et = datetime.now(ET)
-    if now_et.weekday() >= 5:  # Saturday=5, Sunday=6
+    today  = now_et.date()
+    if now_et.weekday() >= 5:
+        print(f"[Market] Weekend -- market closed.")
+        return False
+    if today in US_MARKET_HOLIDAYS_2026:
+        print(f"[Market] Market holiday -- market closed.")
         return False
     market_open  = now_et.replace(hour=9,  minute=30, second=0, microsecond=0)
     market_close = now_et.replace(hour=16, minute=0,  second=0, microsecond=0)
-    return market_open <= now_et <= market_close
+    if not (market_open <= now_et <= market_close):
+        print(f"[Market] Outside market hours ({now_et.strftime('%H:%M ET')}). "
+              f"Market opens 9:30 AM, closes 4:00 PM ET.")
+        return False
+    return True
 
-def already_traded_today(ticker: str, open_trades: dict) -> bool:
-    """Returns True if this ticker was already opened as a trade today."""
-    today = datetime.now(ET).strftime("%Y-%m-%d")
-    if ticker in open_trades:
-        return True
-    return False
-
-# ── Persistence helpers ─────────────────────────────────────────────────────────
+def get_tickers_closed_today() -> set:
+    today_str = datetime.now(ET).strftime("%Y-%m-%d")
+    closed_today = set()
+    if not os.path.exists(POSTMORTEM_FILE):
+        return closed_today
+    with open(POSTMORTEM_FILE, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+                closed_at = record.get("closed_at", "")
+                if closed_at.startswith(today_str):
+                    closed_today.add(record["ticker"])
+            except Exception:
+                pass
+    return closed_today
 
 def load_open_trades() -> dict:
     if os.path.exists(OPEN_TRADES_FILE):
@@ -81,17 +114,7 @@ def append_postmortem(record: dict):
     with open(POSTMORTEM_FILE, "a", encoding="utf-8") as f:
         f.write(json.dumps(record, default=str) + "\n")
 
-
-# ── Check existing open trades for target/stop hits ────────────────────────────
-
 def check_open_trades():
-    """
-    For every currently open paper trade, pull recent price history and
-    check whether the target or stop has been hit since it opened.
-    Closes the trade and writes a postmortem if so. Trades that have
-    exceeded their hold_days window with neither hit get force-closed
-    at the current price, also with a postmortem.
-    """
     open_trades = load_open_trades()
     if not open_trades:
         print("[Check] No open trades to review.")
@@ -114,7 +137,7 @@ def check_open_trades():
             continue
 
         opened_at = datetime.fromisoformat(trade["opened_at"])
-        df_since = df[df.index >= opened_at.strftime("%Y-%m-%d")]
+        df_since  = df[df.index >= opened_at.strftime("%Y-%m-%d")]
         if df_since.empty:
             df_since = df.tail(5)
 
@@ -122,10 +145,14 @@ def check_open_trades():
         stop      = trade.get("stop_loss")
         hold_days = trade.get("hold_days") or 10
 
-        days_open    = (datetime.now() - opened_at).days
-        high_since   = float(df_since["High"].max())
-        low_since    = float(df_since["Low"].min())
+        days_open     = (datetime.now() - opened_at).days
+        high_since    = float(df_since["High"].max())
+        low_since     = float(df_since["Low"].min())
         current_price = float(df["Close"].iloc[-1])
+
+        opened_date = opened_at.strftime("%Y-%m-%d")
+        today_str   = datetime.now(ET).strftime("%Y-%m-%d")
+        is_invalid  = (opened_date == today_str and days_open == 0)
 
         exit_reason = None
         exit_price  = None
@@ -179,25 +206,21 @@ def check_open_trades():
             "ideal_outcome_note": ideal_note,
             "high_since_open":    high_since,
             "low_since_open":     low_since,
+            "valid":              not is_invalid,
         }
         append_postmortem(postmortem)
-        print(f"[Check] CLOSED {ticker}: {exit_reason} at {exit_price} "
-              f"(P&L {pnl_pct}%). {ideal_note}")
-        pnl_word = "gain" if pnl_pct and pnl_pct > 0 else "loss"
-        announce(f"Closed paper trade on {ticker}. {exit_reason.replace('_', ' ')}. "
-                 f"{abs(pnl_pct):.1f} percent {pnl_word}.")
+
+        validity_tag = " [INVALID - ghost trade]" if is_invalid else ""
+        print(f"[Check] CLOSED {ticker}: {exit_reason} at {exit_price} (P&L {pnl_pct}%).{validity_tag}")
+
+        if not is_invalid:
+            pnl_word = "gain" if pnl_pct and pnl_pct > 0 else "loss"
+            announce(f"Closed paper trade on {ticker}. {exit_reason.replace('_', ' ')}. "
+                     f"{abs(pnl_pct):.1f} percent {pnl_word}.")
 
     save_open_trades(still_open)
 
-
-# ── Tier 1: cheap scan ──────────────────────────────────────────────────────────
-
 def tier1_scan(broad: bool = False, top_n: int = 25) -> list:
-    """
-    Cheap scan: health check (above SMA50), ranked by the scanner's own score.
-    broad=True uses the full ticker universe; broad=False uses the small default
-    sample list for a fast run.
-    """
     universe = None
     if broad:
         try:
@@ -237,15 +260,7 @@ def tier1_scan(broad: bool = False, top_n: int = 25) -> list:
     print(f"[Tier 1] {len(candidates)} candidates promoted to Tier 2: {candidates}")
     return candidates
 
-
-# ── Tier 2: AI Brain deep analysis ─────────────────────────────────────────────
-
 def tier2_analyze(candidates: list) -> list:
-    """
-    Run the full AI Brain analysis on Tier 1 survivors.
-    Uses ThreadPoolExecutor to run 5 analyses in parallel.
-    Returns a list of result dicts for anything that came back BUY or STRONG BUY.
-    """
     from concurrent.futures import ThreadPoolExecutor, as_completed
     results_map = {}
 
@@ -273,32 +288,25 @@ def tier2_analyze(candidates: list) -> list:
     print(f"[Tier 2] {len(actionable)} actionable signals found")
     return actionable
 
-
-# ── Tier 3: open new paper trades ──────────────────────────────────────────────
-
 def tier3_open_paper_trades(actionable: list):
-    """
-    Open a paper trade for each actionable signal.
-    MARKET HOURS ONLY: will not open new trades outside 9:30 AM - 4:00 PM ET.
-    Skips any ticker already in open trades to prevent duplicates.
-    """
-    # ── Market hours gate ───────────────────────────────────────────────────
-    if not is_market_hours():
-        now_et = datetime.now(ET)
-        print(f"[Tier 3] Outside market hours ({now_et.strftime('%H:%M ET %A')}). "
-              f"No new trades will be opened.")
-        announce("Agent check complete. Market is closed so no new trades were opened today.")
+    if not is_market_open():
+        print(f"[Tier 3] Market not open. No new trades will be opened.")
+        announce("Agent check complete. Market is closed so no new trades were opened.")
         return
 
-    open_trades = load_open_trades()
+    open_trades  = load_open_trades()
+    closed_today = get_tickers_closed_today()
     opened_count = 0
 
     for result in actionable:
         ticker = result["ticker"]
 
-        # ── Duplicate prevention ────────────────────────────────────────────
         if ticker in open_trades:
             print(f"[Tier 3] {ticker} already has an open paper trade, skipping.")
+            continue
+
+        if ticker in closed_today:
+            print(f"[Tier 3] {ticker} was already closed today, skipping re-entry.")
             continue
 
         trade = {
@@ -321,9 +329,6 @@ def tier3_open_paper_trades(actionable: list):
 
     save_open_trades(open_trades)
     print(f"[Tier 3] {opened_count} new paper trades opened.")
-
-
-# ── Main run ────────────────────────────────────────────────────────────────────
 
 def run(broad: bool = False, top_n: int = 25):
     now_et = datetime.now(ET)
