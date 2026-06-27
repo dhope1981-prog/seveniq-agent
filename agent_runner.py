@@ -10,8 +10,8 @@
 # Every run also checks existing open trades first: if price has hit the
 # target or the stop since opening, the trade is closed and a postmortem
 # is written comparing what was planned against what actually happened.
-# No automatic learning or self-modification happens here -- this just
-# writes the honest record for a human to review later.
+# Stop checks use CLOSING price only -- intraday wicks do not trigger stops.
+# Target checks use intraday High -- locking in gains when price touches target.
 
 import sys
 import json
@@ -32,7 +32,6 @@ except Exception:
     VOICE_AVAILABLE = False
 
 def announce(text):
-    """Speak a message out loud if voice is available."""
     if not VOICE_AVAILABLE:
         return
     try:
@@ -49,7 +48,6 @@ POSTMORTEM_FILE   = os.path.join(LOG_DIR, "postmortems.jsonl")
 
 ET = pytz.timezone("America/New_York")
 
-# ── US Market Holiday list (update annually) ───────────────────────────────────
 US_MARKET_HOLIDAYS_2026 = {
     date(2026, 1, 1),
     date(2026, 1, 19),
@@ -146,9 +144,15 @@ def check_open_trades():
         hold_days = trade.get("hold_days") or 10
 
         days_open     = (datetime.now() - opened_at).days
-        high_since    = float(df_since["High"].max())
-        low_since     = float(df_since["Low"].min())
         current_price = float(df["Close"].iloc[-1])
+
+        # Target: use intraday High -- lock in gains when price touches target
+        high_since = float(df_since["High"].max())
+        # Stop: use daily CLOSE only -- intraday wicks do not trigger stops
+        # This is standard swing trading practice: a stock can wick below
+        # the stop intraday and recover; only a closing break matters
+        close_since_min = float(df_since["Close"].min())
+        low_since = float(df_since["Low"].min())  # kept for postmortem info only
 
         opened_date = opened_at.strftime("%Y-%m-%d")
         today_str   = datetime.now(ET).strftime("%Y-%m-%d")
@@ -160,7 +164,8 @@ def check_open_trades():
         if target and high_since >= target:
             exit_reason = "target_hit"
             exit_price  = target
-        elif stop and low_since <= stop:
+        elif stop and close_since_min <= stop:
+            # Only close if a daily CLOSE was at or below the stop
             exit_reason = "stop_hit"
             exit_price  = stop
         elif days_open >= hold_days:
@@ -168,7 +173,8 @@ def check_open_trades():
             exit_price  = current_price
 
         if exit_reason is None:
-            print(f"[Check] {ticker} still open, no exit condition met yet.")
+            print(f"[Check] {ticker} still open, no exit condition met yet. "
+                  f"Close: ${current_price:.2f} | Stop: ${stop} | Target: ${target}")
             still_open[ticker] = trade
             continue
 
@@ -185,9 +191,9 @@ def check_open_trades():
             if target and high_since >= target:
                 ideal_note = "Target was actually reached within the window but trade was force-closed by time -- hold window may be too short for this setup."
             elif stop and low_since <= stop:
-                ideal_note = "Stop was touched within the window but not caught by this check -- review data granularity."
+                ideal_note = "Intraday price touched stop but never closed below it -- stop held correctly."
             else:
-                ideal_note = f"Neither target ({target}) nor stop ({stop}) was reached. Highest: {high_since:.2f}, Lowest: {low_since:.2f}."
+                ideal_note = f"Neither target ({target}) nor stop ({stop}) was reached. Highest: {high_since:.2f}, Lowest close: {close_since_min:.2f}."
 
         postmortem = {
             "ticker":             ticker,
@@ -206,6 +212,7 @@ def check_open_trades():
             "ideal_outcome_note": ideal_note,
             "high_since_open":    high_since,
             "low_since_open":     low_since,
+            "min_close_since_open": close_since_min,
             "valid":              not is_invalid,
         }
         append_postmortem(postmortem)
