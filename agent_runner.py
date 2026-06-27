@@ -201,21 +201,27 @@ def tier1_scan(broad: bool = False, top_n: int = 25) -> list:
         universe = SAMPLE_UNIVERSE
         print(f"[Tier 1] Using sample universe: {len(universe)} tickers")
 
-    df = run_scanner(
-        mode="Breakout",
-        universe=universe,
-        require_above_sma50=True,
-    )
-
-    if df.empty:
+    all_candidates = []
+    seen = set()
+    for scan_mode in ["Breakout", "Momentum", "Swing Trading"]:
+        df = run_scanner(
+            mode=scan_mode,
+            universe=universe,
+            require_above_sma50=True,
+        )
+        if df.empty:
+            continue
+        score_col = "Score" if "Score" in df.columns else None
+        if score_col:
+            df = df.sort_values(score_col, ascending=False)
+        for ticker in df["Ticker"].head(top_n).tolist():
+            if ticker not in seen:
+                seen.add(ticker)
+                all_candidates.append(ticker)
+    if not all_candidates:
         print("[Tier 1] No candidates passed the health check.")
         return []
-
-    score_col = "Score" if "Score" in df.columns else None
-    if score_col:
-        df = df.sort_values(score_col, ascending=False)
-
-    candidates = df["Ticker"].head(top_n).tolist()
+    candidates = all_candidates[:top_n]
     print(f"[Tier 1] {len(candidates)} candidates promoted to Tier 2: {candidates}")
     return candidates
 
@@ -225,24 +231,35 @@ def tier1_scan(broad: bool = False, top_n: int = 25) -> list:
 def tier2_analyze(candidates: list) -> list:
     """
     Run the full AI Brain analysis on Tier 1 survivors.
+    Uses ThreadPoolExecutor to run 5 analyses in parallel.
     Returns a list of result dicts for anything that came back BUY or STRONG BUY.
     """
-    actionable = []
-    for ticker in candidates:
-        print(f"[Tier 2] Analyzing {ticker}...")
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    results_map = {}
+
+    def analyze_one(ticker):
         try:
             result = analyze_stock(ticker)
+            return ticker, result
         except Exception as e:
-            print(f"[Tier 2] Error analyzing {ticker}: {e}")
-            continue
+            return ticker, {"signal": "HOLD", "confidence": 0}
 
-        signal = result.get("signal", "HOLD")
-        print(f"[Tier 2] {ticker}: {signal} (confidence {result.get('confidence')}%)")
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {executor.submit(analyze_one, t): t for t in candidates}
+        for future in as_completed(futures):
+            ticker, result = future.result()
+            signal = result.get("signal", "HOLD")
+            print(f"[Tier 2] {ticker}: {signal} (confidence {result.get('confidence')}%)")
+            results_map[ticker] = result
 
-        if signal in ["BUY", "STRONG BUY"]:
+    actionable = []
+    for ticker in candidates:
+        result = results_map.get(ticker, {})
+        if result.get("signal") in ["BUY", "STRONG BUY"]:
             actionable.append(result)
 
     print(f"[Tier 2] {len(actionable)} actionable signals found")
+    return actionable
     return actionable
 
 
