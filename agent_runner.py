@@ -305,12 +305,9 @@ def tier3_open_paper_trades(actionable: list):
     closed_today = get_tickers_closed_today()
     opened_count = 0
 
-    # Max concurrent positions cap
-    MAX_OPEN_POSITIONS = 5
-    if len(open_trades) >= MAX_OPEN_POSITIONS:
-        print(f"[Tier 3] Already at max open positions ({MAX_OPEN_POSITIONS}). No new trades opened.")
-        announce(f"Agent found signals but already holding {len(open_trades)} positions. Waiting for exits before adding new trades.")
-        return
+    # No hard cap on positions during paper trading phase
+    # Goal is maximum data collection to prove the system works
+    # Revisit when moving to real money
 
     for result in actionable:
         ticker = result["ticker"]
