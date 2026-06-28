@@ -453,6 +453,12 @@ def run(broad: bool = False, top_n: int = 30):
     print(f"=== SEVENIQ Agent run started: {datetime.now().isoformat()} ===")
     print(f"=== Current ET time: {now_et.strftime('%Y-%m-%d %H:%M %Z')} ===")
 
+    # Weekend guard: markets are closed Sat/Sun, so a scan can't open trades and
+    # just wastes a full broad pass. Bail immediately however the run was launched.
+    if now_et.weekday() >= 5:
+        print("=== Weekend (markets closed) -- agent run skipped. ===")
+        return
+
     print("\n--- Step 1: Checking existing open trades ---")
     check_open_trades()
 
