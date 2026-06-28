@@ -241,45 +241,62 @@ def tier1_scan(broad: bool = False, top_n: int = 30) -> list:
         universe = SAMPLE_UNIVERSE
         print(f"[Tier 1] Using sample universe: {len(universe)} tickers")
 
-    # Run ALL four scan modes and combine. Swing Trading is the validated primary
-    # mode (positive 20-day alpha vs SPY in 3/4 backtested regimes incl. recovery),
-    # so it leads -- but candidates from every mode are pooled, then deduplicated
-    # by ticker keeping the HIGHEST score across modes. Because Swing finds the
-    # best setups, its picks naturally dominate the combined top-N.
-    SCAN_MODES = ["Swing Trading", "Momentum", "Breakout", "Hidden Gems"]
-    best_score = {}   # ticker -> highest Seveniq_Score seen across modes
-    best_mode  = {}   # ticker -> mode that produced that score
+    # Run ALL four scan modes and combine via PER-MODE QUOTAS. Each mode fills a
+    # fixed number of slots from its OWN ranked list -- no cross-mode score
+    # comparison, because the scorers are on different scales (Breakout pins at
+    # the 100 cap for many names, which would otherwise crowd out everything).
+    # Swing Trading is the validated primary mode (positive 20-day alpha vs SPY
+    # in 3/4 backtested regimes incl. recovery), so it gets half the slots.
+    MODE_QUOTAS = [
+        ("Swing Trading", 15),   # 50% -- validated primary mode
+        ("Momentum",       8),   # 27%
+        ("Hidden Gems",    4),   # 13%
+        ("Breakout",       3),   # 10% -- weakest validated mode
+    ]
 
-    for scan_mode in SCAN_MODES:
+    candidates = []
+    seen = set()
+    pick_mode = {}   # ticker -> mode that contributed it (for logging)
+    pick_score = {}  # ticker -> that mode's score (for logging)
+
+    for scan_mode, quota in MODE_QUOTAS:
         df = run_scanner(
             mode=scan_mode,
             universe=universe,
             require_above_sma50=True,
         )
         if df.empty:
+            print(f"[Tier 1] {scan_mode}: 0 scored, 0/{quota} slots filled")
             continue
         score_col = ("Seveniq_Score" if "Seveniq_Score" in df.columns
                      else "Score" if "Score" in df.columns else None)
+        if score_col:
+            df = df.sort_values(score_col, ascending=False)
+        # Fill this mode's quota from its own ranked list, skipping tickers
+        # already taken by a higher-priority mode.
+        filled = 0
         for _, row in df.iterrows():
+            if filled >= quota:
+                break
             ticker = row["Ticker"]
-            score = float(row[score_col]) if score_col else 0.0
-            if ticker not in best_score or score > best_score[ticker]:
-                best_score[ticker] = score
-                best_mode[ticker]  = scan_mode
-        print(f"[Tier 1] {scan_mode}: {len(df)} scored, "
-              f"{len(best_score)} unique tickers in pool so far")
+            if ticker in seen:
+                continue
+            seen.add(ticker)
+            candidates.append(ticker)
+            pick_mode[ticker] = scan_mode
+            pick_score[ticker] = float(row[score_col]) if score_col else 0.0
+            filled += 1
+        print(f"[Tier 1] {scan_mode}: {len(df)} scored, {filled}/{quota} slots filled")
 
-    if not best_score:
+    if not candidates:
         print("[Tier 1] No candidates passed the health check.")
         return []
 
-    # Dedup keeping highest score, then take the top-N unique tickers.
-    ranked = sorted(best_score, key=lambda t: best_score[t], reverse=True)
-    candidates = ranked[:top_n]
-    print(f"[Tier 1] {len(candidates)} unique candidates promoted to Tier 2 "
-          f"(from {len(best_score)} pooled across {len(SCAN_MODES)} modes):")
+    candidates = candidates[:top_n]
+    print(f"[Tier 1] {len(candidates)} candidates promoted to Tier 2 "
+          f"(per-mode quota across {len(MODE_QUOTAS)} modes):")
     for t in candidates:
-        print(f"         {t:<6} score={best_score[t]:.1f}  via {best_mode[t]}")
+        print(f"         {t:<6} score={pick_score[t]:.1f}  via {pick_mode[t]}")
     return candidates
 
 def tier2_analyze(candidates: list) -> list:
