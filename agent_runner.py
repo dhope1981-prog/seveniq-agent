@@ -327,6 +327,37 @@ def tier2_analyze(candidates: list) -> list:
     print(f"[Tier 2] {len(actionable)} actionable signals found")
     return actionable
 
+def base_tightness(ticker: str):
+    """Base-tightness risk overlay. Measures the 20-day price range as a % of
+    price (tight base = small range = lower-volatility, lower-drawdown setup).
+
+    Backtest evidence (4 regimes, 12,600 picks): base tightness does NOT predict
+    higher returns, but tight bases cut loss size ~35% (-7.0% vs -10.6%; and
+    -7.8% vs -12.2% in the 2022 bear) with a marginally higher win rate. So it is
+    used purely for RISK SIZING, not stock selection. Thresholds anchored to the
+    observed depth distribution (median ~16%, tightest-30% <= ~12%).
+
+    Returns (depth_pct, tier, size_multiplier). On any failure returns
+    (None, "UNKNOWN", 1.0) so it never blocks a trade.
+    """
+    try:
+        df = get_stock_data(ticker, period="3mo")
+        if df is None or df.empty or len(df) < 20:
+            return None, "UNKNOWN", 1.0
+        win = df.tail(20)
+        price = float(df["Close"].iloc[-1])
+        if price <= 0:
+            return None, "UNKNOWN", 1.0
+        depth = (float(win["High"].max()) - float(win["Low"].min())) / price * 100.0
+        if depth <= 12.0:
+            return round(depth, 1), "TIGHT", 1.5    # smaller drawdowns -> size up
+        if depth >= 22.0:
+            return round(depth, 1), "LOOSE", 0.5    # wide/high-beta -> size down
+        return round(depth, 1), "NORMAL", 1.0
+    except Exception:
+        return None, "UNKNOWN", 1.0
+
+
 def tier3_open_paper_trades(actionable: list):
     if not is_market_open():
         print(f"[Tier 3] Market not open. No new trades will be opened.")
@@ -352,6 +383,10 @@ def tier3_open_paper_trades(actionable: list):
             print(f"[Tier 3] {ticker} was already closed today, skipping re-entry.")
             continue
 
+        # Base-tightness risk overlay: derive a position-size multiplier from how
+        # tight the recent base is (tight = smaller drawdowns -> size up).
+        base_depth, base_tier, size_mult = base_tightness(ticker)
+
         trade = {
             "ticker":    ticker,
             "signal":    result["signal"],
@@ -361,12 +396,16 @@ def tier3_open_paper_trades(actionable: list):
             "hold_time": result.get("hold_time"),
             "hold_days": result.get("hold_days"),
             "exit_note": result.get("exit_note"),
+            "base_depth_pct":   base_depth,   # 20d range as % of price
+            "base_quality":     base_tier,    # TIGHT / NORMAL / LOOSE
+            "size_multiplier":  size_mult,    # risk-overlay sizing (1.5 / 1.0 / 0.5)
             "opened_at": datetime.now().isoformat(),
         }
         open_trades[ticker] = trade
         opened_count += 1
         print(f"[Tier 3] Opened paper trade: {ticker} @ {trade['entry']} "
-              f"(target {trade['target']}, stop {trade['stop_loss']})")
+              f"(target {trade['target']}, stop {trade['stop_loss']}) "
+              f"| base {base_tier} {base_depth}% -> size x{size_mult}")
         announce(f"Agent opened a new paper trade on {ticker}. "
                  f"{trade['signal']} signal. Entry {trade['entry']:.2f}.")
 
