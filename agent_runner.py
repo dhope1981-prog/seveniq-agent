@@ -214,6 +214,15 @@ def check_open_trades():
             "low_since_open":     low_since,
             "min_close_since_open": close_since_min,
             "valid":              not is_invalid,
+            # Decision context carried from entry, so the live ledger can attribute
+            # this outcome to the signals that drove it.
+            "confidence":            trade.get("confidence"),
+            "confidence_base":       trade.get("confidence_base"),
+            "confidence_components": trade.get("confidence_components"),
+            "entry_pattern":         trade.get("entry_pattern"),
+            "regime_at_entry":       trade.get("regime_at_entry"),
+            "rsi_at_entry":          trade.get("rsi_at_entry"),
+            "base_quality":          trade.get("base_quality"),
         }
         append_postmortem(postmortem)
 
@@ -358,6 +367,32 @@ def base_tightness(ticker: str):
         return None, "UNKNOWN", 1.0
 
 
+def _brain_context(result: dict) -> dict:
+    """Capture the decision context at entry so that when the trade later closes,
+    its outcome can be attributed to the signals that drove it. This is the raw
+    material for the live feedback ledger (live_feedback.py)."""
+    layers = result.get("layers", {}) or {}
+    mr = layers.get("market_regime", {}) or {}
+    sd = layers.get("stock_data", {}) or {}
+    note = str(result.get("exit_note") or "")
+    pattern = None
+    if "based on" in note:
+        seg = note.split("based on", 1)[1].strip()
+        for s in (" (", ".", " --", ","):
+            i = seg.find(s)
+            if i != -1:
+                seg = seg[:i]
+        pattern = seg.strip().replace(" and ", " & ") or None
+    return {
+        "confidence":            result.get("confidence"),
+        "confidence_base":       result.get("confidence_base"),
+        "confidence_components": result.get("confidence_components"),
+        "entry_pattern":         pattern,
+        "regime_at_entry":       mr.get("regime"),
+        "rsi_at_entry":          sd.get("rsi"),
+    }
+
+
 def tier3_open_paper_trades(actionable: list):
     if not is_market_open():
         print(f"[Tier 3] Market not open. No new trades will be opened.")
@@ -400,6 +435,7 @@ def tier3_open_paper_trades(actionable: list):
             "base_quality":     base_tier,    # TIGHT / NORMAL / LOOSE
             "size_multiplier":  size_mult,    # risk-overlay sizing (1.5 / 1.0 / 0.5)
             "opened_at": datetime.now().isoformat(),
+            **_brain_context(result),         # decision context for the live ledger
         }
         open_trades[ticker] = trade
         opened_count += 1
