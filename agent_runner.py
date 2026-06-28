@@ -227,7 +227,7 @@ def check_open_trades():
 
     save_open_trades(still_open)
 
-def tier1_scan(broad: bool = False, top_n: int = 25) -> list:
+def tier1_scan(broad: bool = False, top_n: int = 30) -> list:
     universe = None
     if broad:
         try:
@@ -241,9 +241,16 @@ def tier1_scan(broad: bool = False, top_n: int = 25) -> list:
         universe = SAMPLE_UNIVERSE
         print(f"[Tier 1] Using sample universe: {len(universe)} tickers")
 
-    all_candidates = []
-    seen = set()
-    for scan_mode in ["Breakout", "Momentum", "Swing Trading"]:
+    # Run ALL four scan modes and combine. Swing Trading is the validated primary
+    # mode (positive 20-day alpha vs SPY in 3/4 backtested regimes incl. recovery),
+    # so it leads -- but candidates from every mode are pooled, then deduplicated
+    # by ticker keeping the HIGHEST score across modes. Because Swing finds the
+    # best setups, its picks naturally dominate the combined top-N.
+    SCAN_MODES = ["Swing Trading", "Momentum", "Breakout", "Hidden Gems"]
+    best_score = {}   # ticker -> highest Seveniq_Score seen across modes
+    best_mode  = {}   # ticker -> mode that produced that score
+
+    for scan_mode in SCAN_MODES:
         df = run_scanner(
             mode=scan_mode,
             universe=universe,
@@ -251,20 +258,28 @@ def tier1_scan(broad: bool = False, top_n: int = 25) -> list:
         )
         if df.empty:
             continue
-        score_col = "Score" if "Score" in df.columns else None
-        if score_col:
-            df = df.sort_values(score_col, ascending=False)
-        for ticker in df["Ticker"].head(top_n).tolist():
-            if ticker not in seen:
-                seen.add(ticker)
-                all_candidates.append(ticker)
+        score_col = ("Seveniq_Score" if "Seveniq_Score" in df.columns
+                     else "Score" if "Score" in df.columns else None)
+        for _, row in df.iterrows():
+            ticker = row["Ticker"]
+            score = float(row[score_col]) if score_col else 0.0
+            if ticker not in best_score or score > best_score[ticker]:
+                best_score[ticker] = score
+                best_mode[ticker]  = scan_mode
+        print(f"[Tier 1] {scan_mode}: {len(df)} scored, "
+              f"{len(best_score)} unique tickers in pool so far")
 
-    if not all_candidates:
+    if not best_score:
         print("[Tier 1] No candidates passed the health check.")
         return []
 
-    candidates = all_candidates[:top_n]
-    print(f"[Tier 1] {len(candidates)} candidates promoted to Tier 2: {candidates}")
+    # Dedup keeping highest score, then take the top-N unique tickers.
+    ranked = sorted(best_score, key=lambda t: best_score[t], reverse=True)
+    candidates = ranked[:top_n]
+    print(f"[Tier 1] {len(candidates)} unique candidates promoted to Tier 2 "
+          f"(from {len(best_score)} pooled across {len(SCAN_MODES)} modes):")
+    for t in candidates:
+        print(f"         {t:<6} score={best_score[t]:.1f}  via {best_mode[t]}")
     return candidates
 
 def tier2_analyze(candidates: list) -> list:
@@ -341,7 +356,7 @@ def tier3_open_paper_trades(actionable: list):
     save_open_trades(open_trades)
     print(f"[Tier 3] {opened_count} new paper trades opened.")
 
-def run(broad: bool = False, top_n: int = 25):
+def run(broad: bool = False, top_n: int = 30):
     now_et = datetime.now(ET)
     print(f"=== SEVENIQ Agent run started: {datetime.now().isoformat()} ===")
     print(f"=== Current ET time: {now_et.strftime('%Y-%m-%d %H:%M %Z')} ===")
@@ -366,4 +381,5 @@ def run(broad: bool = False, top_n: int = 25):
     print("=== Run complete ===")
 
 if __name__ == "__main__":
-    run(broad=True, top_n=100)
+    # Top 30 unique candidates (pooled across all 4 scan modes) go to the Brain.
+    run(broad=True, top_n=30)
