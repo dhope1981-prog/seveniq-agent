@@ -437,12 +437,15 @@ def tier3_open_paper_trades(actionable: list):
             print(f"[Tier 3] {ticker} was already closed today, skipping re-entry.")
             continue
 
-        # Price floor: skip sub-$5 penny names. We use a $5 floor in every backtest (they're
-        # dominated by noise/artifacts and blow up); the live agent should match. This also
-        # covers the case where we have no fundamentals to health-check a tiny speculative name.
+        # Price floor: $2, set by DATA not convention. Bucketed our own 16yr history by price:
+        # $2-5 stocks actually had the HIGHEST win rate (56%) -- NOT junk. But below ~$2 the
+        # crash rate climbs and it's a lottery under $1 (+262% avg = a few moonshots + 5.8%
+        # crash), and survivorship bias flatters cheap-stock numbers most (the ones that died
+        # to zero are missing). So we cut only the genuine danger zone (<$2) and keep the good
+        # $2-5 names. (An earlier $5 floor was an untested assumption that threw out good trades.)
         _entry = result.get("entry") or 0
-        if _entry and _entry < 5.0:
-            print(f"[Tier 3] {ticker} SKIPPED -- price ${_entry:.2f} below $5 penny floor.")
+        if _entry and _entry < 2.0:
+            print(f"[Tier 3] {ticker} SKIPPED -- price ${_entry:.2f} below $2 floor (lottery zone).")
             continue
 
         # Health filter (validated: distressed-company dips crash 2-4x more often and win
