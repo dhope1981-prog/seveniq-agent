@@ -292,6 +292,9 @@ def tier1_scan(broad: bool = False, top_n: int = 30) -> list:
             mode=scan_mode,
             universe=universe,
             require_above_sma50=True,
+            min_price=2.0,   # $2 floor at the SCAN stage: sub-$2 names never get scored,
+                             # surfaced, or sent to the (paid) Brain. Data-backed by
+                             # validate_price_buckets.py -- <$2 is the lottery/danger zone.
         )
         if df.empty:
             print(f"[Tier 1] {scan_mode}: 0 scored, 0/{quota} slots filled")
