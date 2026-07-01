@@ -437,6 +437,14 @@ def tier3_open_paper_trades(actionable: list):
             print(f"[Tier 3] {ticker} was already closed today, skipping re-entry.")
             continue
 
+        # Price floor: skip sub-$5 penny names. We use a $5 floor in every backtest (they're
+        # dominated by noise/artifacts and blow up); the live agent should match. This also
+        # covers the case where we have no fundamentals to health-check a tiny speculative name.
+        _entry = result.get("entry") or 0
+        if _entry and _entry < 5.0:
+            print(f"[Tier 3] {ticker} SKIPPED -- price ${_entry:.2f} below $5 penny floor.")
+            continue
+
         # Health filter (validated: distressed-company dips crash 2-4x more often and win
         # ~4 pts less -- fundamentals_edgar/validate_distress_dip.py). Skip the financially
         # SICK (insolvent / death-spiral / >=2 red flags); this only removes risk. Names we
