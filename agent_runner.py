@@ -292,9 +292,11 @@ def tier1_scan(broad: bool = False, top_n: int = 30) -> list:
             mode=scan_mode,
             universe=universe,
             require_above_sma50=True,
-            min_price=2.0,   # $2 floor at the SCAN stage: sub-$2 names never get scored,
-                             # surfaced, or sent to the (paid) Brain. Data-backed by
-                             # validate_price_buckets.py -- <$2 is the lottery/danger zone.
+            min_price=1.0,   # $1 floor: block only the clear sub-$1 lottery zone. We're
+                             # LIVE-TESTING the uncertain $1-2 zone (backtest said it looks
+                             # decent -- 54% win, +7.4% -- but is survivor-flattered; live
+                             # paper trading has NO survivorship bias, so it settles it clean).
+                             # Trades tagged with price_bucket for the ledger to compare.
         )
         if df.empty:
             print(f"[Tier 1] {scan_mode}: 0 scored, 0/{quota} slots filled")
@@ -447,9 +449,11 @@ def tier3_open_paper_trades(actionable: list):
         # to zero are missing). So we cut only the genuine danger zone (<$2) and keep the good
         # $2-5 names. (An earlier $5 floor was an untested assumption that threw out good trades.)
         _entry = result.get("entry") or 0
-        if _entry and _entry < 2.0:
-            print(f"[Tier 3] {ticker} SKIPPED -- price ${_entry:.2f} below $2 floor (lottery zone).")
+        if _entry and _entry < 1.0:
+            print(f"[Tier 3] {ticker} SKIPPED -- price ${_entry:.2f} below $1 floor (sub-$1 lottery zone).")
             continue
+        _price_bucket = ("$1-2" if _entry < 2 else "$2-5" if _entry < 5
+                         else "$5-10" if _entry < 10 else "$10-50" if _entry < 50 else "$50+")
 
         # Health filter (validated: distressed-company dips crash 2-4x more often and win
         # ~4 pts less -- fundamentals_edgar/validate_distress_dip.py). Skip the financially
@@ -480,6 +484,7 @@ def tier3_open_paper_trades(actionable: list):
             "size_multiplier":  size_mult,    # risk-overlay sizing (1.5 / 1.0 / 0.5)
             "health_status":    health["status"],      # healthy / watch / unknown
             "health_flags":     health["flags"],       # red flags present (for the ledger)
+            "price_bucket":     _price_bucket,          # $1-2 / $2-5 / ... (live penny-stock test)
             "opened_at": datetime.now().isoformat(),
             **_brain_context(result),         # decision context for the live ledger
         }
