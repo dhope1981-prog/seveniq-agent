@@ -24,6 +24,7 @@ from scanner import run_scanner
 from ai_brain import analyze_stock
 from data_engine import get_stock_data
 from config import SAMPLE_UNIVERSE
+from health_filter import get_health   # "avoid financially sick companies" risk filter
 
 try:
     import voice_engine
@@ -45,6 +46,24 @@ LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 OPEN_TRADES_FILE  = os.path.join(LOG_DIR, "open_trades.json")
 POSTMORTEM_FILE   = os.path.join(LOG_DIR, "postmortems.jsonl")
+HEALTH_SKIP_FILE  = os.path.join(LOG_DIR, "health_skips.jsonl")   # trades skipped as sick
+
+
+def _log_health_skip(ticker, result, health):
+    """Record a trade the health filter blocked, so we can later measure whether the
+    skipped (distressed) names really would have underperformed -- validating the filter live."""
+    try:
+        with open(HEALTH_SKIP_FILE, "a") as f:
+            f.write(json.dumps({
+                "ticker": ticker,
+                "skipped_at": datetime.now().isoformat(),
+                "signal": result.get("signal"),
+                "would_be_entry": result.get("entry"),
+                "flags": health.get("flags"),
+                "as_of": health.get("as_of"),
+            }, default=str) + "\n")
+    except Exception:
+        pass
 
 ET = pytz.timezone("America/New_York")
 
@@ -418,6 +437,17 @@ def tier3_open_paper_trades(actionable: list):
             print(f"[Tier 3] {ticker} was already closed today, skipping re-entry.")
             continue
 
+        # Health filter (validated: distressed-company dips crash 2-4x more often and win
+        # ~4 pts less -- fundamentals_edgar/validate_distress_dip.py). Skip the financially
+        # SICK (insolvent / death-spiral / >=2 red flags); this only removes risk. Names we
+        # have no fundamentals for return status "unknown" and pass through untouched.
+        health = get_health(ticker)
+        if health["distressed"]:
+            print(f"[Tier 3] {ticker} SKIPPED -- financially distressed "
+                  f"({', '.join(health['flags'])}). Dodging the falling knife.")
+            _log_health_skip(ticker, result, health)
+            continue
+
         # Base-tightness risk overlay: derive a position-size multiplier from how
         # tight the recent base is (tight = smaller drawdowns -> size up).
         base_depth, base_tier, size_mult = base_tightness(ticker)
@@ -434,6 +464,8 @@ def tier3_open_paper_trades(actionable: list):
             "base_depth_pct":   base_depth,   # 20d range as % of price
             "base_quality":     base_tier,    # TIGHT / NORMAL / LOOSE
             "size_multiplier":  size_mult,    # risk-overlay sizing (1.5 / 1.0 / 0.5)
+            "health_status":    health["status"],      # healthy / watch / unknown
+            "health_flags":     health["flags"],       # red flags present (for the ledger)
             "opened_at": datetime.now().isoformat(),
             **_brain_context(result),         # decision context for the live ledger
         }
