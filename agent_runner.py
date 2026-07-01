@@ -292,11 +292,13 @@ def tier1_scan(broad: bool = False, top_n: int = 30) -> list:
             mode=scan_mode,
             universe=universe,
             require_above_sma50=True,
-            min_price=1.0,   # $1 floor: block only the clear sub-$1 lottery zone. We're
-                             # LIVE-TESTING the uncertain $1-2 zone (backtest said it looks
-                             # decent -- 54% win, +7.4% -- but is survivor-flattered; live
-                             # paper trading has NO survivorship bias, so it settles it clean).
-                             # Trades tagged with price_bucket for the ledger to compare.
+            min_price=0.01,  # NO price floor (Dustin's call): live-test the WHOLE price range,
+                             # incl. sub-$1, with no assumptions -- paper trading has no
+                             # survivorship bias, so the results settle it. The min_volume
+                             # filter (500k) still screens the most illiquid ghost stocks.
+                             # CAVEAT: paper trades assume you can fill at the quoted price;
+                             # for sub-$1 names real spreads/liquidity make live worse than this.
+                             # Trades tagged with price_bucket so the ledger compares by price.
         )
         if df.empty:
             print(f"[Tier 1] {scan_mode}: 0 scored, 0/{quota} slots filled")
@@ -449,10 +451,10 @@ def tier3_open_paper_trades(actionable: list):
         # to zero are missing). So we cut only the genuine danger zone (<$2) and keep the good
         # $2-5 names. (An earlier $5 floor was an untested assumption that threw out good trades.)
         _entry = result.get("entry") or 0
-        if _entry and _entry < 1.0:
-            print(f"[Tier 3] {ticker} SKIPPED -- price ${_entry:.2f} below $1 floor (sub-$1 lottery zone).")
+        if _entry <= 0:      # data-sanity only (bad/zero price) -- no real price floor
+            print(f"[Tier 3] {ticker} SKIPPED -- no valid entry price.")
             continue
-        _price_bucket = ("$1-2" if _entry < 2 else "$2-5" if _entry < 5
+        _price_bucket = ("<$1" if _entry < 1 else "$1-2" if _entry < 2 else "$2-5" if _entry < 5
                          else "$5-10" if _entry < 10 else "$10-50" if _entry < 50 else "$50+")
 
         # Health filter (validated: distressed-company dips crash 2-4x more often and win
